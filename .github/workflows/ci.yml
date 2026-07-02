@@ -26,6 +26,8 @@ jobs:
   build:
     name: Build
     uses: rust-proxy/workflows/.github/workflows/rust-build.yml@v1.0.35
+    permissions:
+      contents: write  # 显式授予写入权限，解决报错
     secrets:
       sentry-dsn: ${{ secrets.SENTRY_DSN }}
     with:
