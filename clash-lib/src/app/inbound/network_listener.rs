@@ -8,6 +8,10 @@ use crate::{
         mixed::MixedInbound,
         socks::inbound::SocksInbound,
         tunnel::TunnelInbound,
+        vless::inbound::{
+            InboundOptions as VlessInboundOptions, VlessInbound,
+            VlessInboundUser as RuntimeVlessInboundUser, WsInboundOptions,
+        },
     },
 };
 
@@ -224,6 +228,45 @@ fn build_handler(
                 Ok(h) => Some(Arc::new(h)),
                 Err(e) => {
                     warn!("anytls inbound failed to init: {e}");
+                    None
+                }
+            }
+        }
+        InboundOpts::Vless {
+            common_opts,
+            uuid,
+            users,
+            transport,
+        } => {
+            if !transport.typ.eq_ignore_ascii_case("ws") {
+                warn!(
+                    "vless inbound {} only supports websocket transport",
+                    common_opts.name
+                );
+                return None;
+            }
+
+            match VlessInbound::new(VlessInboundOptions {
+                addr: (common_opts.listen.0, common_opts.port).into(),
+                allow_lan: common_opts.allow_lan,
+                dispatcher,
+                fw_mark: common_opts.fw_mark,
+                uuid: uuid.clone(),
+                users: users
+                    .iter()
+                    .map(|user| RuntimeVlessInboundUser {
+                        uuid: user.uuid.clone(),
+                        name: user.name.clone(),
+                    })
+                    .collect(),
+                ws: WsInboundOptions {
+                    path: transport.path.clone(),
+                    early_data_header_name: transport.early_data_header_name.clone(),
+                },
+            }) {
+                Ok(h) => Some(Arc::new(h)),
+                Err(e) => {
+                    warn!("vless inbound failed to init: {e}");
                     None
                 }
             }

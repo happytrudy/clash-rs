@@ -386,6 +386,7 @@ pub enum Type {
     Tunnel,
     Shadowsocks,
     Anytls,
+    Vless,
     #[cfg(feature = "shadowquic")]
     ShadowQuic,
     Ignore,

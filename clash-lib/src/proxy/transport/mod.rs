@@ -28,7 +28,7 @@ pub use splice_tls::VisionOptions;
 pub use tls::Client as TlsClient;
 #[cfg(feature = "shadowsocks")]
 pub use v2ray::{V2RayOBFSOption, V2rayWsClient};
-pub use ws::Client as WsClient;
+pub use ws::{Client as WsClient, WebsocketConn};
 
 #[async_trait::async_trait]
 pub trait Transport: Send + Sync {

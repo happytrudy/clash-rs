@@ -57,8 +57,10 @@ impl Config {
                 )));
             }
         }
-        // Check for duplicate AnyTLS user passwords
         for opts in &self.listeners {
+            opts.validate()?;
+
+            // Check for duplicate AnyTLS user passwords.
             if let crate::config::internal::listener::InboundOpts::Anytls {
                 common_opts,
                 users,

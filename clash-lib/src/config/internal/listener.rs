@@ -1,7 +1,7 @@
 use crate::common::utils::default_bool_true;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(feature = "shadowquic")]
 use std::hash::Hash;
 
@@ -35,6 +35,28 @@ pub struct ShadowQuicJlsUpstream {
     pub addr: String,
     #[serde(default)]
     pub rate_limit: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Hash, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct VlessInboundUser {
+    pub uuid: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Hash, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct VlessInboundTransport {
+    #[serde(rename = "type")]
+    pub typ: String,
+    pub path: String,
+    #[serde(
+        default,
+        alias = "early_data_header_name",
+        alias = "early-data-header-name"
+    )]
+    pub early_data_header_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -119,6 +141,16 @@ pub enum InboundOpts {
         /// silently dropped.
         #[serde(default)]
         fallback: Option<String>,
+    },
+    #[serde(alias = "vless")]
+    Vless {
+        #[serde(flatten)]
+        common_opts: CommonInboundOpts,
+        #[serde(default)]
+        uuid: Option<String>,
+        #[serde(default)]
+        users: Vec<VlessInboundUser>,
+        transport: VlessInboundTransport,
     },
     #[cfg(feature = "shadowquic")]
     #[serde(alias = "shadowquic")]
@@ -260,6 +292,20 @@ impl PartialEq for InboundOpts {
                     ..
                 },
             ) => a == b && pa == pb && ca == cb && pka == pkb && fa == fb,
+            (
+                InboundOpts::Vless {
+                    common_opts: a,
+                    uuid: ua,
+                    users: users_a,
+                    transport: ta,
+                },
+                InboundOpts::Vless {
+                    common_opts: b,
+                    uuid: ub,
+                    users: users_b,
+                    transport: tb,
+                },
+            ) => a == b && ua == ub && users_a == users_b && ta == tb,
             #[cfg(feature = "shadowquic")]
             (
                 InboundOpts::ShadowQuic {
@@ -375,6 +421,17 @@ impl std::hash::Hash for InboundOpts {
                 fallback.hash(state);
                 // `users` intentionally excluded — handled via watch channel
             }
+            InboundOpts::Vless {
+                common_opts,
+                uuid,
+                users,
+                transport,
+            } => {
+                common_opts.hash(state);
+                uuid.hash(state);
+                users.hash(state);
+                transport.hash(state);
+            }
             #[cfg(feature = "shadowquic")]
             InboundOpts::ShadowQuic {
                 common_opts,
@@ -412,6 +469,23 @@ impl std::hash::Hash for InboundOpts {
 }
 
 impl InboundOpts {
+    pub fn validate(&self) -> Result<(), crate::Error> {
+        match self {
+            InboundOpts::Vless {
+                common_opts,
+                uuid,
+                users,
+                transport,
+            } => validate_vless_inbound(
+                common_opts.name.as_str(),
+                uuid.as_deref(),
+                users,
+                transport,
+            ),
+            _ => Ok(()),
+        }
+    }
+
     pub fn common_opts(&self) -> &CommonInboundOpts {
         match self {
             InboundOpts::Http { common_opts, .. } => common_opts,
@@ -425,6 +499,7 @@ impl InboundOpts {
             #[cfg(feature = "shadowsocks")]
             InboundOpts::Shadowsocks { common_opts, .. } => common_opts,
             InboundOpts::Anytls { common_opts, .. } => common_opts,
+            InboundOpts::Vless { common_opts, .. } => common_opts,
             #[cfg(feature = "shadowquic")]
             InboundOpts::ShadowQuic { common_opts, .. } => common_opts,
         }
@@ -443,6 +518,7 @@ impl InboundOpts {
             #[cfg(feature = "shadowsocks")]
             InboundOpts::Shadowsocks { common_opts, .. } => common_opts,
             InboundOpts::Anytls { common_opts, .. } => common_opts,
+            InboundOpts::Vless { common_opts, .. } => common_opts,
             #[cfg(feature = "shadowquic")]
             InboundOpts::ShadowQuic { common_opts, .. } => common_opts,
         }
@@ -461,9 +537,140 @@ impl InboundOpts {
             #[cfg(feature = "shadowsocks")]
             InboundOpts::Shadowsocks { .. } => "shadowsocks",
             InboundOpts::Anytls { .. } => "anytls",
+            InboundOpts::Vless { .. } => "vless",
             #[cfg(feature = "shadowquic")]
             InboundOpts::ShadowQuic { .. } => "shadowquic",
         }
+    }
+}
+
+fn validate_vless_inbound(
+    name: &str,
+    uuid: Option<&str>,
+    users: &[VlessInboundUser],
+    transport: &VlessInboundTransport,
+) -> Result<(), crate::Error> {
+    if !transport.typ.eq_ignore_ascii_case("ws") {
+        return Err(crate::Error::InvalidConfig(format!(
+            "vless inbound '{name}': only websocket transport is supported"
+        )));
+    }
+
+    if transport.path.is_empty() || !transport.path.starts_with('/') {
+        return Err(crate::Error::InvalidConfig(format!(
+            "vless inbound '{name}': websocket path must be absolute"
+        )));
+    }
+
+    if uuid.is_none() && users.is_empty() {
+        return Err(crate::Error::InvalidConfig(format!(
+            "vless inbound '{name}': uuid or users is required"
+        )));
+    }
+
+    if let Some(header_name) = &transport.early_data_header_name {
+        http::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
+            crate::Error::InvalidConfig(format!(
+                "vless inbound '{name}': invalid early-data-header-name \
+                 '{header_name}': {e}"
+            ))
+        })?;
+    }
+
+    let mut seen = HashSet::new();
+    if let Some(uuid) = uuid {
+        let parsed = parse_vless_uuid(name, uuid)?;
+        seen.insert(parsed);
+    }
+    for user in users {
+        let parsed = parse_vless_uuid(name, user.uuid.as_str())?;
+        if !seen.insert(parsed) {
+            return Err(crate::Error::InvalidConfig(format!(
+                "vless inbound '{name}': duplicate uuid {}",
+                user.uuid
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_vless_uuid(name: &str, uuid: &str) -> Result<uuid::Uuid, crate::Error> {
+    uuid::Uuid::parse_str(uuid).map_err(|e| {
+        crate::Error::InvalidConfig(format!(
+            "vless inbound '{name}': invalid uuid {uuid}: {e}"
+        ))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const UUID: &str = "d4f2ad1c-f6db-481e-91de-9d551f8885c9";
+
+    fn vless_listener() -> InboundOpts {
+        InboundOpts::Vless {
+            common_opts: CommonInboundOpts {
+                name: "vless-ws-in".to_owned(),
+                listen: BindAddress::local(),
+                allow_lan: false,
+                port: 60178,
+                fw_mark: None,
+            },
+            uuid: Some(UUID.to_owned()),
+            users: Vec::new(),
+            transport: VlessInboundTransport {
+                typ: "ws".to_owned(),
+                path: "/assets/js/chunks/main.d4f2ad1c.js".to_owned(),
+                early_data_header_name: Some("Sec-WebSocket-Protocol".to_owned()),
+            },
+        }
+    }
+
+    #[test]
+    fn validate_vless_accepts_ws_listener() {
+        assert!(vless_listener().validate().is_ok());
+    }
+
+    #[test]
+    fn validate_vless_rejects_unsupported_transport() {
+        let mut listener = vless_listener();
+        if let InboundOpts::Vless { transport, .. } = &mut listener {
+            transport.typ = "grpc".to_owned();
+        }
+
+        assert!(listener.validate().is_err());
+    }
+
+    #[test]
+    fn validate_vless_rejects_bad_uuid() {
+        let mut listener = vless_listener();
+        if let InboundOpts::Vless { uuid, .. } = &mut listener {
+            *uuid = Some("not-a-uuid".to_owned());
+        }
+
+        assert!(listener.validate().is_err());
+    }
+
+    #[test]
+    fn validate_vless_rejects_relative_ws_path() {
+        let mut listener = vless_listener();
+        if let InboundOpts::Vless { transport, .. } = &mut listener {
+            transport.path = "relative".to_owned();
+        }
+
+        assert!(listener.validate().is_err());
+    }
+
+    #[test]
+    fn validate_vless_rejects_invalid_early_data_header_name() {
+        let mut listener = vless_listener();
+        if let InboundOpts::Vless { transport, .. } = &mut listener {
+            transport.early_data_header_name = Some("bad header".to_owned());
+        }
+
+        assert!(listener.validate().is_err());
     }
 }
 
@@ -530,10 +737,12 @@ impl TryFrom<HashMap<String, Value>> for InboundProviderDef {
 #[derive(Serialize, Deserialize, Debug, Clone, Hash, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub struct CommonInboundOpts {
+    #[serde(alias = "tag")]
     pub name: String,
     pub listen: BindAddress,
     #[serde(default)]
     pub allow_lan: bool,
+    #[serde(alias = "listen-port", alias = "listen_port")]
     pub port: u16,
     /// Linux routing mark
     pub fw_mark: Option<u32>,

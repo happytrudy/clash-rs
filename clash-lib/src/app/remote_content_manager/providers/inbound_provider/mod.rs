@@ -51,6 +51,11 @@ impl InboundSetProvider {
                     anyhow::anyhow!("inbound provider {n} parse error: {e}")
                 })?;
             let opts = scheme.listeners.unwrap_or_default();
+            for opt in &opts {
+                opt.validate().map_err(|e| {
+                    anyhow::anyhow!("inbound provider {n} validation error: {e}")
+                })?;
+            }
             Ok(opts)
         });
 
