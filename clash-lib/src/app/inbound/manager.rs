@@ -160,7 +160,7 @@ impl InboundManager {
         for (name, def) in providers {
             let (vehicle, interval): (
                 Arc<dyn crate::app::remote_content_manager::providers::ProviderVehicle + Send + Sync>,
-                Duration,
+                Option<Duration>,
             ) = match def {
                 InboundProviderDef::Http(InboundHttpProvider {
                     url,
@@ -181,11 +181,11 @@ impl InboundManager {
                         Some(cwd.clone()),
                         dns_resolver.clone(),
                     );
-                    (Arc::new(v), Duration::from_secs(interval))
+                    (Arc::new(v), Some(Duration::from_secs(interval)))
                 }
                 InboundProviderDef::File(InboundFileProvider { path, interval, .. }) => {
                     let v = file_vehicle::Vehicle::new(&path);
-                    (Arc::new(v), Duration::from_secs(interval.unwrap_or(0)))
+                    (Arc::new(v), interval.map(Duration::from_secs))
                 }
             };
 

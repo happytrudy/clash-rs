@@ -37,7 +37,7 @@ pub struct InboundSetProvider {
 impl InboundSetProvider {
     pub fn new(
         name: String,
-        interval: Duration,
+        interval: Option<Duration>,
         vehicle: ThreadSafeProviderVehicle,
         on_update: impl Fn(Vec<InboundOpts>) -> BoxFuture<'static, ()>
         + Send
@@ -62,13 +62,7 @@ impl InboundSetProvider {
         let updater: InboundUpdater = Box::new(move |opts| on_update(opts));
 
         Ok(Self {
-            fetcher: Fetcher::new(
-                name,
-                Some(interval),
-                vehicle,
-                parser,
-                Some(updater),
-            ),
+            fetcher: Fetcher::new(name, interval, vehicle, parser, Some(updater)),
         })
     }
 
@@ -120,7 +114,7 @@ listeners:
 
         let provider = InboundSetProvider::new(
             "test".to_owned(),
-            Duration::ZERO,
+            Some(Duration::ZERO),
             vehicle,
             move |opts| {
                 let received = received_clone.clone();
@@ -160,7 +154,7 @@ listeners:
 
         let provider = InboundSetProvider::new(
             "test".to_owned(),
-            Duration::ZERO,
+            Some(Duration::ZERO),
             vehicle,
             move |opts| {
                 let received = received_clone.clone();
@@ -185,7 +179,7 @@ listeners:
 
         let provider = InboundSetProvider::new(
             "test".to_owned(),
-            Duration::ZERO,
+            Some(Duration::ZERO),
             vehicle,
             move |opts| {
                 let called = called_clone.clone();
