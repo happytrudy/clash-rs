@@ -387,6 +387,7 @@ pub enum Type {
     Shadowsocks,
     Anytls,
     Vless,
+    Hysteria2,
     #[cfg(feature = "shadowquic")]
     ShadowQuic,
     Ignore,

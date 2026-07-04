@@ -1,13 +1,14 @@
 use std::{
     collections::HashMap,
     fmt, io,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicU16, Ordering},
     },
     task::{Context, Poll},
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -49,6 +50,7 @@ const MAX_UDP_ROUTES_PER_CONN: usize = 1024;
 const MAX_UDP_PENDING_IDS_PER_CONN: usize = 256;
 const MAX_UDP_PENDING_PACKETS_PER_ID: usize = 16;
 const MAX_UDP_RESPONSE_DESTS_PER_ASSOC: usize = 1024;
+const UDP_PENDING_TTL: Duration = Duration::from_secs(30);
 
 pub struct InboundOptions {
     pub addr: SocketAddr,
@@ -146,9 +148,7 @@ impl ShadowQuicInbound {
     }
 
     fn source_allowed(&self, source: SocketAddr) -> bool {
-        self.opts.allow_lan
-            || self.opts.addr.ip().is_unspecified()
-            || source.ip() == self.opts.addr.ip()
+        source_allowed(self.opts.allow_lan, source, self.opts.addr.ip())
     }
 }
 
@@ -223,6 +223,12 @@ fn canonical_addr(addr: SocketAddr) -> SocketAddr {
             .unwrap_or(addr),
         _ => addr,
     }
+}
+
+fn source_allowed(allow_lan: bool, source: SocketAddr, listen_ip: IpAddr) -> bool {
+    allow_lan
+        || source.ip() == listen_ip
+        || (listen_ip.is_unspecified() && source.ip().is_loopback())
 }
 
 async fn handle_connection<C>(
@@ -354,7 +360,7 @@ where
             warn!("shadowquic inbound received unexpected SQAuthenticate");
         }
         SQReq::SQExtension(_) => {
-            warn!("shadowquic inbound SQExtension is not supported in clash-rs");
+            debug!("shadowquic inbound SQExtension is not supported in clash-rs");
         }
         #[allow(unreachable_patterns)]
         _ => {
@@ -563,13 +569,18 @@ where
 struct ConnState<C: QuicConnection> {
     next_send_id: AtomicU16,
     inbound_ids: Mutex<HashMap<u16, InboundUdpRoute>>,
-    pending: Mutex<HashMap<u16, Vec<Bytes>>>,
+    pending: Mutex<HashMap<u16, PendingUdpPackets>>,
     _marker: std::marker::PhantomData<C>,
 }
 
 struct InboundUdpRoute {
     tx: mpsc::Sender<(Bytes, SQAddr)>,
     dst: SQAddr,
+}
+
+struct PendingUdpPackets {
+    created_at: Instant,
+    packets: Vec<Bytes>,
 }
 
 impl<C: QuicConnection> ConnState<C> {
@@ -612,7 +623,7 @@ impl<C: QuicConnection> ConnState<C> {
         }
 
         if let Some(pending) = self.pending.lock().await.remove(&id) {
-            for bytes in pending {
+            for bytes in pending.packets {
                 if let Err(e) = tx.send((bytes, dst.clone())).await {
                     self.inbound_ids.lock().await.remove(&id);
                     return Err(SError::UDPSessionClosed(format!(
@@ -654,13 +665,25 @@ impl<C: QuicConnection> ConnState<C> {
         };
 
         if let Some((tx, dst)) = route {
-            tx.send((bytes, dst)).await.map_err(|e| {
-                SError::UDPSessionClosed(format!("UDP request channel closed: {e}"))
-            })?;
+            if let Err(e) = tx.send((bytes, dst)).await {
+                let mut inbound_ids = self.inbound_ids.lock().await;
+                if inbound_ids
+                    .get(&id)
+                    .is_some_and(|route| route.tx.same_channel(&tx))
+                {
+                    inbound_ids.remove(&id);
+                }
+                drop(inbound_ids);
+                self.pending.lock().await.remove(&id);
+                return Err(SError::UDPSessionClosed(format!(
+                    "UDP request channel closed: {e}"
+                )));
+            }
             return Ok(());
         }
 
         let mut pending = self.pending.lock().await;
+        pending.retain(|_, packets| packets.created_at.elapsed() < UDP_PENDING_TTL);
         if !pending.contains_key(&id)
             && pending.len() >= MAX_UDP_PENDING_IDS_PER_CONN
         {
@@ -670,14 +693,17 @@ impl<C: QuicConnection> ConnState<C> {
             )));
         }
 
-        let packets = pending.entry(id).or_default();
-        if packets.len() >= MAX_UDP_PENDING_PACKETS_PER_ID {
+        let packets = pending.entry(id).or_insert_with(|| PendingUdpPackets {
+            created_at: Instant::now(),
+            packets: Vec::new(),
+        });
+        if packets.packets.len() >= MAX_UDP_PENDING_PACKETS_PER_ID {
             return Err(SError::UDPSessionClosed(format!(
                 "too many pending UDP packets for id {id}: {}",
-                packets.len()
+                packets.packets.len()
             )));
         }
-        packets.push(bytes);
+        packets.packets.push(bytes);
         Ok(())
     }
 }
@@ -810,5 +836,173 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>> {
         Pin::new(&mut self.send).poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use shadowquic::quic::QuicErrorRepr;
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+    #[test]
+    fn source_allowed_rejects_public_source_on_unspecified_listener() {
+        let source = SocketAddr::from(([203, 0, 113, 10], 50000));
+
+        assert!(!source_allowed(false, source, IpAddr::from([0, 0, 0, 0])));
+    }
+
+    #[test]
+    fn source_allowed_accepts_loopback_on_unspecified_listener() {
+        let source = SocketAddr::from(([127, 0, 0, 1], 50000));
+
+        assert!(source_allowed(false, source, IpAddr::from([0, 0, 0, 0])));
+    }
+
+    #[test]
+    fn source_allowed_accepts_same_bound_ip() {
+        let source = SocketAddr::from(([127, 0, 0, 1], 50000));
+
+        assert!(source_allowed(false, source, IpAddr::from([127, 0, 0, 1])));
+    }
+
+    #[tokio::test]
+    async fn closed_udp_route_is_removed() {
+        let state = ConnState::<FakeConn>::new(FakeConn);
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+
+        state
+            .register_inbound_id(
+                7,
+                SQAddr::from_domain("example.com".to_owned(), 443),
+                tx,
+            )
+            .await
+            .unwrap();
+
+        let err = state
+            .deliver_inbound_packet(7, Bytes::from_static(b"payload"))
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("UDP request channel closed"));
+        assert!(!state.inbound_ids.lock().await.contains_key(&7));
+    }
+
+    #[tokio::test]
+    async fn expired_pending_udp_packets_are_pruned() {
+        let state = ConnState::<FakeConn>::new(FakeConn);
+        let expired_at = Instant::now()
+            .checked_sub(UDP_PENDING_TTL + Duration::from_secs(1))
+            .unwrap();
+        state.pending.lock().await.insert(
+            1,
+            PendingUdpPackets {
+                created_at: expired_at,
+                packets: vec![Bytes::from_static(b"old")],
+            },
+        );
+
+        state
+            .deliver_inbound_packet(2, Bytes::from_static(b"new"))
+            .await
+            .unwrap();
+
+        let pending = state.pending.lock().await;
+        assert!(!pending.contains_key(&1));
+        assert!(pending.contains_key(&2));
+    }
+
+    #[derive(Clone)]
+    struct FakeConn;
+
+    struct NoopStream;
+
+    impl AsyncRead for NoopStream {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for NoopStream {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[async_trait]
+    impl QuicConnection for FakeConn {
+        type SendStream = NoopStream;
+        type RecvStream = NoopStream;
+
+        async fn open_bi(
+            &self,
+        ) -> Result<(Self::SendStream, Self::RecvStream, u64), QuicErrorRepr>
+        {
+            Ok((NoopStream, NoopStream, 0))
+        }
+
+        async fn accept_bi(
+            &self,
+        ) -> Result<(Self::SendStream, Self::RecvStream, u64), QuicErrorRepr>
+        {
+            Ok((NoopStream, NoopStream, 0))
+        }
+
+        async fn open_uni(&self) -> Result<(Self::SendStream, u64), QuicErrorRepr> {
+            Ok((NoopStream, 0))
+        }
+
+        async fn accept_uni(
+            &self,
+        ) -> Result<(Self::RecvStream, u64), QuicErrorRepr> {
+            Ok((NoopStream, 0))
+        }
+
+        async fn read_datagram(&self) -> Result<Bytes, QuicErrorRepr> {
+            Ok(Bytes::new())
+        }
+
+        async fn send_datagram(&self, _bytes: Bytes) -> Result<(), QuicErrorRepr> {
+            Ok(())
+        }
+
+        fn close(&self, _error_code: u64, _reason: &[u8]) {}
+
+        fn close_reason(&self) -> Option<QuicErrorRepr> {
+            None
+        }
+
+        fn remote_address(&self) -> SocketAddr {
+            SocketAddr::from(([127, 0, 0, 1], 50000))
+        }
+
+        fn peer_id(&self) -> u64 {
+            0
+        }
     }
 }

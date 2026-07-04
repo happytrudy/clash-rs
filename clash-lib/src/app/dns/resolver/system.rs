@@ -6,7 +6,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use rand::seq::IteratorRandom;
-use tracing::{debug, warn};
+use tracing::debug;
 
 pub struct SystemResolver {
     ipv6: AtomicBool,
@@ -40,7 +40,7 @@ impl ClashResolver for SystemResolver {
                 if self.ipv6() || x.is_ipv4() {
                     Some(x.ip())
                 } else {
-                    warn!(
+                    debug!(
                         "resolved v6 address {} for {} but ipv6 is disabled",
                         x.ip(),
                         host

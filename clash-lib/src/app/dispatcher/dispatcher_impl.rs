@@ -208,8 +208,10 @@ impl Dispatcher {
             }
             Err(err) => {
                 warn!(
-                    "failed to establish remote connection {}, error: {}",
-                    sess, err
+                    "failed to establish remote connection: {} ({:?}), session: {}",
+                    err,
+                    err.kind(),
+                    sess
                 );
                 if let Err(e) = lhs.shutdown().await {
                     warn!("error closing local connection {}: {}", sess, e)

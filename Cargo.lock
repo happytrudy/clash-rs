@@ -569,8 +569,6 @@ dependencies = [
 [[package]]
 name = "async-web-client"
 version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37381fb4fad3cd9b579628c21a58f528ef029d1f072d10f16cb9431aa2236d29"
 dependencies = [
  "async-http-codec",
  "async-net",
@@ -1502,9 +1500,11 @@ dependencies = [
  "regex",
  "register-count",
  "reqwest",
+ "ring",
  "russh",
  "rust-embed",
  "rustls",
+ "rustls-acme",
  "rustls-pemfile",
  "security-framework",
  "serde",
@@ -1553,6 +1553,7 @@ dependencies = [
  "watfaq-netstack",
  "webpki-roots 1.0.7",
  "windows 0.62.2",
+ "x509-parser 0.18.1",
  "zip",
  "zstd",
 ]
@@ -7047,6 +7048,7 @@ checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
 dependencies = [
  "aws-lc-rs",
  "pem",
+ "ring",
  "rustls-pki-types",
  "time",
  "yasna 0.5.2",
@@ -7585,6 +7587,7 @@ dependencies = [
  "log",
  "pem",
  "rcgen 0.13.2",
+ "ring",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

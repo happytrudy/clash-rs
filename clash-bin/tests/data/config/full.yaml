@@ -331,6 +331,68 @@ listeners:
       path: /assets/js/chunks/main.d4f2ad1c.js
       early-data-header-name: Sec-WebSocket-Protocol
 
+  # Hysteria2 inbound with automatic ACME certificate.
+  # ACME uses TLS-ALPN-01 on TCP with the same listen:port; Hysteria2 traffic
+  # uses QUIC/UDP on that same port. No extra port number is opened.
+  # Public Let's Encrypt validation requires TCP 443, so production deployments
+  # should use port: 443 and point the domain's A/AAAA record here.
+  - name: hysteria2-in
+    type: hysteria2
+    listen: "::"
+    port: 443
+    password: "your-password-here"
+    acme:
+      domain: hy2.example.com
+      email: admin@example.com
+      cache-dir: ./acme/hysteria2
+      production: true
+      # Default is tls-alpn-01, which uses TCP on the same port number as UDP.
+      # To avoid opening TCP, use dns-01 with Cloudflare:
+      # challenge: dns-01
+      # dns:
+      #   provider: cloudflare
+      #   cloudflare:
+      #     api-token: "cloudflare-api-token"
+      #     # Or use a Cloudflare Global API Key:
+      #     # api-key: "cloudflare-global-api-key"
+      #     # auth-email: "cloudflare-account@example.com"
+      #     zone-id: "optional-zone-id"
+      #     ttl: 1                    # 1 means automatic; otherwise >= 60
+      #     propagation-delay: 30      # seconds
+    # Official Hysteria2 SNI guard modes: disable, dns-san, strict.
+    sniGuard: dns-san
+    masquerade:
+      type: string
+      string:
+        content: "<!doctype html><html><body>OK</body></html>\n"
+        statusCode: 200
+        headers:
+          content-type: text/html; charset=utf-8
+    # Other supported official-style masquerade examples:
+    # masquerade:
+    #   type: file
+    #   file:
+    #     dir: /var/www/html
+    # masquerade:
+    #   type: proxy
+    #   proxy:
+    #     url: https://example.com
+    #     rewriteHost: true
+    #     xForwarded: true
+    #     insecure: false
+    # Official Hysteria2 salamander obfs. Official clients must use the same
+    # password. The shorthand `obfs: salamander` + `obfs-password: ...` is also
+    # accepted.
+    obfs:
+      type: salamander
+      salamander:
+        password: "obfs-secret"
+    # users:                                # multi-user (overrides password:)
+    #   - name: alice
+    #     password: "alice-password"
+    #   - name: bob
+    #     password: "bob-password"
+
 # Inbound providers — load listener lists from files or HTTP endpoints.
 # The referenced YAML must have a top-level `listeners:` key.
 # inbound-providers:

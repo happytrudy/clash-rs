@@ -1,6 +1,7 @@
 mod codec;
 mod congestion;
 mod datagram;
+pub mod inbound;
 mod salamander;
 mod udp_hop;
 
@@ -583,7 +584,8 @@ impl HysteriaConnection {
                 ));
             }
         };
-        let fragments = Fragments::new(session_id, pkt_id, addr, max_frag_size, pkt);
+        let fragments =
+            Fragments::try_new(session_id, pkt_id, addr, max_frag_size, pkt)?;
         let mut frag_count = 0;
         for frag in fragments {
             frag_count += 1;
@@ -607,7 +609,13 @@ impl HysteriaConnection {
     pub async fn recv_packet(self: Arc<Self>, pkt: Bytes) {
         tracing::trace!("hysteria2 recv_packet: {} bytes", pkt.len());
         let mut buf: BytesMut = pkt.into();
-        let pkt = codec::HysUdpPacket::decode(&mut buf).unwrap();
+        let pkt = match codec::HysUdpPacket::decode(&mut buf) {
+            Ok(pkt) => pkt,
+            Err(e) => {
+                tracing::warn!("hysteria2 received invalid UDP packet: {e}");
+                return;
+            }
+        };
         let session_id = pkt.session_id;
         let mut udp_sessions = self.udp_sessions.lock().await;
         match udp_sessions.get_mut(&session_id) {

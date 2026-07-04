@@ -4,6 +4,16 @@ use crate::{
     proxy::{
         anytls::inbound::{AnytlsInbound, InboundOptions as AnytlsInboundOptions},
         http::HttpInbound,
+        hysteria2::inbound::{
+            AcmeChallenge as Hysteria2AcmeChallenge,
+            AcmeOptions as Hysteria2AcmeOptions,
+            CloudflareAuth as Hysteria2CloudflareAuth,
+            CloudflareDnsOptions as Hysteria2CloudflareDnsOptions, Hysteria2Inbound,
+            InboundOptions as Hysteria2InboundOptions,
+            MasqueradeOptions as Hysteria2MasqueradeOptions,
+            ObfsOptions as Hysteria2ObfsOptions,
+            SniGuardMode as Hysteria2SniGuardMode,
+        },
         inbound::InboundHandlerTrait,
         mixed::MixedInbound,
         socks::inbound::SocksInbound,
@@ -30,7 +40,7 @@ use crate::proxy::shadowquic::inbound::{
 };
 #[cfg(feature = "shadowsocks")]
 use crate::proxy::shadowsocks::inbound::{InboundOptions, ShadowsocksInbound};
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 pub(crate) fn build_network_listeners(
     inbound_opts: &InboundOpts,
@@ -271,6 +281,165 @@ fn build_handler(
                 }
             }
         }
+        InboundOpts::Hysteria2 {
+            common_opts,
+            password,
+            certificate,
+            private_key,
+            acme,
+            obfs,
+            obfs_password,
+            users,
+            sni_guard,
+            masquerade,
+        } => {
+            let rx = users_rx
+                .unwrap_or_else(|| tokio::sync::watch::channel(users.clone()).1);
+            let acme = acme.as_ref().map(|acme| {
+                let challenge = match acme.challenge {
+                    crate::config::internal::listener::Hysteria2AcmeChallenge::TlsAlpn01 => {
+                        Hysteria2AcmeChallenge::TlsAlpn01
+                    }
+                    crate::config::internal::listener::Hysteria2AcmeChallenge::Dns01 => {
+                        let dns = acme
+                            .dns
+                            .as_ref()
+                            .expect("hysteria2 dns-01 config validated");
+                        let cloudflare = dns
+                            .cloudflare
+                            .as_ref()
+                            .expect("hysteria2 cloudflare dns config validated");
+                        let auth = match cloudflare.api_key.as_deref() {
+                            Some(key) if !key.trim().is_empty() => {
+                                Hysteria2CloudflareAuth::GlobalKey {
+                                    email: cloudflare
+                                        .auth_email
+                                        .as_ref()
+                                        .expect("cloudflare auth-email validated")
+                                        .trim()
+                                        .to_owned(),
+                                    key: key.trim().to_owned(),
+                                }
+                            }
+                            _ => Hysteria2CloudflareAuth::ApiToken(
+                                cloudflare
+                                    .api_token
+                                    .as_ref()
+                                    .expect("cloudflare api-token validated")
+                                    .trim()
+                                    .to_owned(),
+                            ),
+                        };
+                        Hysteria2AcmeChallenge::Dns01 {
+                            cloudflare: Hysteria2CloudflareDnsOptions {
+                                auth,
+                                zone_id: cloudflare.zone_id.clone(),
+                                ttl: cloudflare.ttl,
+                                propagation_delay: Duration::from_secs(
+                                    cloudflare.propagation_delay.unwrap_or(30),
+                                ),
+                            },
+                        }
+                    }
+                };
+                Hysteria2AcmeOptions {
+                    domain: acme.domain.clone(),
+                    email: acme.email.clone(),
+                    cache_dir: acme
+                        .cache_dir
+                        .as_ref()
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| {
+                            default_hysteria2_acme_cache_dir(&acme.domain)
+                        }),
+                    production: acme.production,
+                    challenge,
+                }
+            });
+            let obfs = obfs.as_ref().map(|obfs| {
+                let password = obfs
+                    .salamander_password(obfs_password.as_deref())
+                    .expect("hysteria2 obfs password validated")
+                    .to_owned();
+                Hysteria2ObfsOptions::Salamander { password }
+            });
+            let sni_guard = match sni_guard {
+                crate::config::internal::listener::Hysteria2SniGuard::Disable => {
+                    Hysteria2SniGuardMode::Disable
+                }
+                crate::config::internal::listener::Hysteria2SniGuard::DnsSan => {
+                    Hysteria2SniGuardMode::DnsSan
+                }
+                crate::config::internal::listener::Hysteria2SniGuard::Strict => {
+                    Hysteria2SniGuardMode::Strict
+                }
+            };
+            let masquerade = masquerade
+                .as_ref()
+                .map(|masquerade| match masquerade.typ {
+                    crate::config::internal::listener::Hysteria2MasqueradeType::NotFound => {
+                        Hysteria2MasqueradeOptions::NotFound
+                    }
+                    crate::config::internal::listener::Hysteria2MasqueradeType::File => {
+                        let file = masquerade
+                            .file
+                            .as_ref()
+                            .expect("hysteria2 masquerade file config validated");
+                        Hysteria2MasqueradeOptions::File {
+                            dir: PathBuf::from(&file.dir),
+                        }
+                    }
+                    crate::config::internal::listener::Hysteria2MasqueradeType::Proxy => {
+                        let proxy = masquerade
+                            .proxy
+                            .as_ref()
+                            .expect("hysteria2 masquerade proxy config validated");
+                        Hysteria2MasqueradeOptions::Proxy {
+                            url: proxy.url.clone(),
+                            rewrite_host: proxy.rewrite_host,
+                            x_forwarded: proxy.x_forwarded,
+                            insecure: proxy.insecure,
+                        }
+                    }
+                    crate::config::internal::listener::Hysteria2MasqueradeType::String => {
+                        let string = masquerade
+                            .string
+                            .as_ref()
+                            .expect("hysteria2 masquerade string config validated");
+                        Hysteria2MasqueradeOptions::String {
+                            content: string.content.clone(),
+                            headers: string
+                                .headers
+                                .iter()
+                                .map(|(name, value)| (name.clone(), value.clone()))
+                                .collect(),
+                            status_code: string.status_code,
+                        }
+                    }
+                })
+                .unwrap_or_default();
+
+            match Hysteria2Inbound::new(Hysteria2InboundOptions {
+                addr: (common_opts.listen.0, common_opts.port).into(),
+                password: password.clone(),
+                certificate: certificate.clone(),
+                private_key: private_key.clone(),
+                acme,
+                obfs,
+                sni_guard,
+                masquerade,
+                allow_lan: common_opts.allow_lan,
+                dispatcher,
+                fw_mark: common_opts.fw_mark,
+                users_rx: rx,
+            }) {
+                Ok(h) => Some(Arc::new(h)),
+                Err(e) => {
+                    warn!("hysteria2 inbound failed to init: {e}");
+                    None
+                }
+            }
+        }
         #[cfg(feature = "shadowquic")]
         InboundOpts::ShadowQuic {
             common_opts,
@@ -313,4 +482,18 @@ fn build_handler(
             }
         },
     }
+}
+
+fn default_hysteria2_acme_cache_dir(domain: &str) -> PathBuf {
+    let safe_domain: String = domain
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    PathBuf::from("./hysteria2-acme-cache").join(safe_domain)
 }

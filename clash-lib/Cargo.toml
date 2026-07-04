@@ -17,9 +17,11 @@ aws-lc-rs = [
     "hickory-net/https-aws-lc-rs",
     "watfaq-dns/aws-lc-rs",
     "rcgen/aws_lc_rs",
+    "rustls-acme/aws-lc-rs",
     "shadowquic?/aws-lc-rs",
 ]
 ring = [
+    "dep:ring",
     "rustls/ring",
     "quinn-proto/ring",
     "quinn/rustls-ring",
@@ -28,6 +30,7 @@ ring = [
     "hickory-net/https-ring",
     "watfaq-dns/ring",
     "rcgen/ring",
+    "rustls-acme/ring",
     "shadowquic?/ring",
 ]
 
@@ -76,6 +79,9 @@ rustls = { version = "0.23", default-features = false }
 rustls-pemfile = "2"
 rcgen = { version = "0.14", default-features = false, features = ["pem"] }
 webpki-roots = "1.0"
+rustls-acme = { git = "https://github.com/rust-proxy/rustls-acme", branch = "feat/ip", default-features = false, features = ["tokio", "webpki-roots"] }
+reqwest = { version = "0.13", features = ["json"] }
+x509-parser = "0.18"
 
 # Error handing & logging
 thiserror = "2"
@@ -213,6 +219,7 @@ downcast-rs = "2.0"
 tailscale = { version = "0.3.3", optional = true }
 
 aws-lc-rs = { version = "1", default-features = false, optional = true }
+ring = { version = "0.17", optional = true }
 
 # tproxy
 etherparse = {version = "0.20", optional = true }

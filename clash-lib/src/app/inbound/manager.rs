@@ -31,9 +31,7 @@ use std::{
 /// push user-list updates without restarting the listener.
 struct ProviderHandleEntry {
     handle: Option<JoinHandle<()>>,
-    /// Present only for Shadowsocks and AnyTLS listeners — used to push updated
-    /// user lists without restarting the listener.
-    /// lists into the running listener without a restart.
+    /// Present for listeners that support live user-list updates.
     #[allow(dead_code)]
     users_tx: Option<tokio::sync::watch::Sender<Vec<InboundUser>>>,
 }
@@ -41,8 +39,7 @@ struct ProviderHandleEntry {
 /// Per-listener handle entry for static (non-provider) inbounds.
 struct StaticHandleEntry {
     handle: Option<JoinHandle<()>>,
-    /// Present only for AnyTLS (and Shadowsocks) listeners — used to push
-    /// updated user lists without restarting the listener.
+    /// Present for listeners that support live user-list updates.
     #[allow(dead_code)]
     users_tx: Option<tokio::sync::watch::Sender<Vec<InboundUser>>>,
 }
@@ -50,6 +47,30 @@ struct StaticHandleEntry {
 type ProviderHandles =
     Arc<RwLock<HashMap<String, HashMap<InboundOpts, ProviderHandleEntry>>>>;
 use tracing::{error, info, warn};
+
+fn listener_user_list(opts: &InboundOpts) -> Option<&Vec<InboundUser>> {
+    match opts {
+        #[cfg(feature = "shadowsocks")]
+        InboundOpts::Shadowsocks { users, .. } => Some(users),
+        InboundOpts::Anytls { users, .. } => Some(users),
+        InboundOpts::Hysteria2 { users, .. } => Some(users),
+        _ => None,
+    }
+}
+
+fn create_users_watch(
+    opts: &InboundOpts,
+) -> (
+    Option<tokio::sync::watch::Receiver<Vec<InboundUser>>>,
+    Option<tokio::sync::watch::Sender<Vec<InboundUser>>>,
+) {
+    listener_user_list(opts)
+        .map(|users| {
+            let (tx, rx) = tokio::sync::watch::channel(users.clone());
+            (Some(rx), Some(tx))
+        })
+        .unwrap_or((None, None))
+}
 
 /// Legacy ports configuration for inbounds.
 /// Newer inbounds have their own port configuration
@@ -219,24 +240,14 @@ impl InboundManager {
                             // Structural key matched (same port/cipher/password).
                             // Push updated user list via watch channel if present —
                             // this avoids restarting the listener entirely.
-                            #[cfg(feature = "shadowsocks")]
-                            if let (InboundOpts::Shadowsocks { users, .. }, Some(tx)) =
-                                (&opts, &entry.users_tx)
+                            if let (Some(users), Some(tx)) =
+                                (listener_user_list(&opts), &entry.users_tx)
                                 && tx.send(users.clone()).is_ok()
                             {
                                 info!(
-                                    "inbound provider {provider_name}: user list \
-                                     updated in place ({} users)",
-                                    users.len()
-                                );
-                            }
-                            if let (InboundOpts::Anytls { users, .. }, Some(tx)) =
-                                (&opts, &entry.users_tx)
-                                && tx.send(users.clone()).is_ok()
-                            {
-                                info!(
-                                    "inbound provider {provider_name}: anytls user \
+                                    "inbound provider {provider_name}: {} user \
                                      list updated in place ({} users)",
+                                    opts.type_name(),
                                     users.len()
                                 );
                             }
@@ -275,36 +286,9 @@ impl InboundManager {
                              '{listener_name}'"
                         );
 
-                        // For Shadowsocks and AnyTLS, create a watch channel so
-                        // future user-list updates can be pushed without a restart.
-                        #[cfg(feature = "shadowsocks")]
-                        let (users_rx, users_tx) =
-                            if let InboundOpts::Shadowsocks { users, .. } = &opts {
-                                let (tx, rx) =
-                                    tokio::sync::watch::channel(users.clone());
-                                (Some(rx), Some(tx))
-                            } else if let InboundOpts::Anytls { users, .. } = &opts {
-                                let (tx, rx) =
-                                    tokio::sync::watch::channel(users.clone());
-                                (Some(rx), Some(tx))
-                            } else {
-                                (None, None)
-                            };
-                        #[cfg(not(feature = "shadowsocks"))]
-                        let (users_rx, users_tx) = if let InboundOpts::Anytls {
-                            users,
-                            ..
-                        } = &opts
-                        {
-                            let (tx, rx) =
-                                tokio::sync::watch::channel(users.clone());
-                            (Some(rx), Some(tx))
-                        } else {
-                            (
-                                None::<tokio::sync::watch::Receiver<Vec<InboundUser>>>,
-                                None,
-                            )
-                        };
+                        // Create a watch channel for listener types whose users
+                        // can be updated in place.
+                        let (users_rx, users_tx) = create_users_watch(&opts);
 
                         let handle = build_network_listeners(
                             &opts,
@@ -370,27 +354,9 @@ impl InboundManager {
             let cancellation_token = cancellation_token.clone();
             let name = opts.common_opts().name.clone();
 
-            // For AnyTLS (and Shadowsocks), create a watch channel so user-list
-            // updates can be pushed without a full restart.
-            #[cfg(feature = "shadowsocks")]
-            let (users_rx, users_tx) =
-                if let InboundOpts::Shadowsocks { users, .. } = opts {
-                    let (tx, rx) = tokio::sync::watch::channel(users.clone());
-                    (Some(rx), Some(tx))
-                } else if let InboundOpts::Anytls { users, .. } = opts {
-                    let (tx, rx) = tokio::sync::watch::channel(users.clone());
-                    (Some(rx), Some(tx))
-                } else {
-                    (None, None)
-                };
-            #[cfg(not(feature = "shadowsocks"))]
-            let (users_rx, users_tx) =
-                if let InboundOpts::Anytls { users, .. } = opts {
-                    let (tx, rx) = tokio::sync::watch::channel(users.clone());
-                    (Some(rx), Some(tx))
-                } else {
-                    (None::<tokio::sync::watch::Receiver<Vec<InboundUser>>>, None)
-                };
+            // Create a watch channel for listener types whose users can be
+            // updated in place.
+            let (users_rx, users_tx) = create_users_watch(opts);
 
             entry.users_tx = users_tx;
             entry.handle = build_network_listeners(
