@@ -1,15 +1,23 @@
-mode: direct
+mode: rule
 log-level: info
 
 listeners:
   - name: snell-v6-in
     type: snell
-    listen: 127.0.0.1
+    listen: 0.0.0.0
     port: 444
-    allow-lan: false
+    allow-lan: true
     version: 6
     psk: "!dubuxOpopop880@@"
     users:
       - name: dubux
         userkey: "!Opopop880@@"
     mode: default
+
+rules:
+  # Local clients are always allowed.
+  - SRC-IP-CIDR,127.0.0.1/32,DIRECT,no-resolve
+  # Replace these documentation ranges with trusted client addresses.
+  - SRC-IP-CIDR,192.0.2.10/32,DIRECT,no-resolve
+  - SRC-IP-CIDR,198.51.100.0/24,DIRECT,no-resolve
+  - MATCH,REJECT

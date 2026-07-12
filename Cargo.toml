@@ -48,5 +48,8 @@ needless_collect = "deny"
 [patch.crates-io]
 rustls = { git = "https://github.com/Watfaq/rustls.git", branch = "watfaq/0.23.40" }
 tokio-rustls = { git = "https://github.com/Watfaq/tokio-rustls.git", branch = "watfaq/0.26.4" }
-shadowquic = { git = "https://github.com/spongebob888/shadowquic", rev = "1db0142b3d960d876d5884277edaa210e318965e" }
-shadowquic-macros = { git = "https://github.com/spongebob888/shadowquic", rev = "1db0142b3d960d876d5884277edaa210e318965e" }
+shadowquic = { git = "https://github.com/happytrudy/shadowquic", rev = "89d080b85e059536d6e47019f5ce420cf49f130e" }
+shadowquic-macros = { git = "https://github.com/happytrudy/shadowquic", rev = "89d080b85e059536d6e47019f5ce420cf49f130e" }
+
+[patch."https://github.com/proxy-rs/quinn-congestions.git"]
+quinn-congestions = { git = "https://github.com/happytrudy/quinn-congestions", rev = "9f5fbd7b4677538e174720b7990a7e420f68ba3b" }

@@ -66,9 +66,7 @@ impl SunnyQuicInbound {
             max_path_num: opts.max_path_num,
             alpn: opts.alpn,
             zero_rtt: opts.zero_rtt,
-            congestion_control: normalize_congestion_control(
-                opts.congestion_control,
-            ),
+            congestion_control: opts.congestion_control,
             initial_mtu: opts.initial_mtu,
             min_mtu: opts.min_mtu,
             gso: opts.gso,
@@ -121,9 +119,16 @@ impl InboundHandlerTrait for SunnyQuicInbound {
 
             match event {
                 Event::Request(Ok(request)) => {
+                    let source = request.remote_address().unwrap_or_else(|| {
+                        warn!(
+                            "sunnyquic request has no remote address; source IP \
+                             rules will not match"
+                        );
+                        unspecified_source(self.addr)
+                    });
                     dispatch_request(
                         request,
-                        unspecified_source(self.addr),
+                        source,
                         self.dispatcher.clone(),
                         self.fw_mark,
                     );
@@ -247,15 +252,6 @@ fn to_auth_users(users: &[InboundUser]) -> Vec<AuthUser> {
             password: user.password.clone(),
         })
         .collect()
-}
-
-fn normalize_congestion_control(
-    congestion_control: CongestionControl,
-) -> CongestionControl {
-    match congestion_control {
-        CongestionControl::Bbr => CongestionControl::Bbr3,
-        other => other,
-    }
 }
 
 fn unspecified_source(listen: SocketAddr) -> SocketAddr {
@@ -526,14 +522,6 @@ mod tests {
     }
 
     #[test]
-    fn maps_bbr_to_bbr3() {
-        assert!(matches!(
-            normalize_congestion_control(CongestionControl::Bbr),
-            CongestionControl::Bbr3
-        ));
-    }
-
-    #[test]
     fn requires_loopback_when_lan_access_is_disabled() {
         assert!(
             validate_listener_access("127.0.0.1:1443".parse().unwrap(), false)
@@ -660,7 +648,7 @@ log-level: "error"
         let mmdb = config_dir.join("Country.mmdb");
         let config = format!(
             r#"mmdb: "{mmdb}"
-mode: direct
+mode: rule
 log-level: error
 listeners:
   - name: sunnyquic-in
@@ -689,6 +677,9 @@ listeners:
     max-path-num: 12
     gso: true
     mtu-discovery: true
+rules:
+  - SRC-IP-CIDR,127.0.0.1/32,DIRECT,no-resolve
+  - MATCH,REJECT
 "#,
             mmdb = mmdb.display(),
             certificate = certificate.display(),
