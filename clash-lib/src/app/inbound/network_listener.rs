@@ -14,6 +14,8 @@ use crate::{
     },
 };
 
+#[cfg(feature = "snell")]
+use crate::proxy::snell::{InboundOptions as SnellInboundOptions, SnellInbound};
 #[cfg(feature = "shadowquic")]
 use crate::proxy::sunnyquic::{
     InboundOptions as SunnyQuicInboundOptions, SunnyQuicInbound,
@@ -204,6 +206,29 @@ fn build_handler(
                 users_rx: rx,
             })))
         }
+        #[cfg(feature = "snell")]
+        InboundOpts::Snell {
+            common_opts,
+            version,
+            psk,
+            users,
+            mode,
+        } => match SnellInbound::new(SnellInboundOptions {
+            addr: (common_opts.listen.0, common_opts.port).into(),
+            version: *version,
+            psk: psk.clone(),
+            users: users.clone(),
+            mode: mode.clone(),
+            allow_lan: common_opts.allow_lan,
+            dispatcher,
+            fw_mark: common_opts.fw_mark,
+        }) {
+            Ok(handler) => Some(Arc::new(handler)),
+            Err(error) => {
+                warn!("snell inbound failed to init: {error}");
+                None
+            }
+        },
         InboundOpts::Anytls {
             common_opts,
             password,

@@ -262,6 +262,65 @@ mod tests {
         }));
     }
 
+    #[cfg(feature = "snell")]
+    #[test]
+    fn parses_snell_v6_listener() {
+        let cfg = r#"
+        listeners:
+          - name: snell-in
+            type: snell
+            listen: 127.0.0.1
+            port: 444
+            version: 6
+            psk: "!dubuxOpopop880@@"
+            users:
+              - name: dubux
+                userkey: "!Opopop880@@"
+            mode: default
+        "#;
+        let config = cfg.parse::<def::Config>().expect("should parse");
+        let config = convert(config).expect("should convert");
+
+        assert!(config.listeners.iter().any(|listener| match listener {
+            InboundOpts::Snell {
+                common_opts,
+                version,
+                psk,
+                users,
+                mode,
+            } => {
+                common_opts.port == 444
+                    && *version == 6
+                    && psk == "!dubuxOpopop880@@"
+                    && users.len() == 1
+                    && users[0].name == "dubux"
+                    && users[0].userkey == "!Opopop880@@"
+                    && mode == "default"
+            }
+            _ => false,
+        }));
+    }
+
+    #[cfg(feature = "snell")]
+    #[test]
+    fn parses_snell_v6_example_file() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../snell-v6-inbound.yaml");
+        let yaml =
+            std::fs::read_to_string(path).expect("example file should be readable");
+        let config = yaml.parse::<def::Config>().expect("example should parse");
+        let config = convert(config).expect("example should convert");
+
+        assert!(config.listeners.iter().any(|listener| matches!(
+            listener,
+            InboundOpts::Snell {
+                version: 6,
+                mode,
+                ..
+            } if mode == "default"
+        )));
+    }
+
     #[cfg(feature = "shadowquic")]
     #[test]
     fn parses_sunnyquic_listener() {

@@ -1,0 +1,15 @@
+mode: direct
+log-level: info
+
+listeners:
+  - name: snell-v6-in
+    type: snell
+    listen: 127.0.0.1
+    port: 444
+    allow-lan: false
+    version: 6
+    psk: "!dubuxOpopop880@@"
+    users:
+      - name: dubux
+        userkey: "!Opopop880@@"
+    mode: default

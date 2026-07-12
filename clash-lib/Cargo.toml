@@ -33,6 +33,7 @@ ring = [
 
 # Protos
 shadowsocks = ["dep:shadowsocks", "dep:blake3"]
+snell = ["dep:argon2"]
 tuic = ["dep:tuic-core", "dep:register-count"]
 ssh = ["dep:russh", "dep:dirs", "dep:totp-rs"]
 onion = ["dep:arti-client", "dep:tor-rtcompat", "arti-client/onion-service-client"]
@@ -131,6 +132,7 @@ aead = { version = "0.5", features = ["std"] }
 aes = "0.9"
 blake3 = { version = "1", optional = true }
 aes-gcm = "0.11"
+argon2 = { version = "0.5.3", optional = true }
 cfb-mode = "0.9"
 const-fnv1a-hash = "1"
 

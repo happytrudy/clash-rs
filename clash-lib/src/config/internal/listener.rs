@@ -15,6 +15,14 @@ pub struct InboundUser {
     pub password: String,
 }
 
+#[cfg(feature = "snell")]
+#[derive(Serialize, Deserialize, Debug, Clone, Hash, Eq, PartialEq)]
+pub struct SnellInboundUser {
+    #[serde(default)]
+    pub name: String,
+    pub userkey: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "kebab-case")]
@@ -73,6 +81,18 @@ pub enum InboundOpts {
         /// to identify which user owns each connection.
         #[serde(default)]
         users: Vec<InboundUser>,
+    },
+    #[cfg(feature = "snell")]
+    #[serde(alias = "snell")]
+    Snell {
+        #[serde(flatten)]
+        common_opts: CommonInboundOpts,
+        version: u8,
+        psk: String,
+        #[serde(default)]
+        users: Vec<SnellInboundUser>,
+        #[serde(default = "default_snell_mode")]
+        mode: String,
     },
     #[serde(alias = "anytls")]
     Anytls {
@@ -165,6 +185,11 @@ pub enum InboundOpts {
     },
 }
 
+#[cfg(feature = "snell")]
+fn default_snell_mode() -> String {
+    "default".to_owned()
+}
+
 #[cfg(feature = "shadowquic")]
 fn default_sunnyquic_max_path_num() -> u32 {
     12
@@ -245,6 +270,23 @@ impl PartialEq for InboundOpts {
                     ..
                 },
             ) => a == b && ua == ub && ca == cb && pa == pb,
+            #[cfg(feature = "snell")]
+            (
+                InboundOpts::Snell {
+                    common_opts: a,
+                    version: va,
+                    psk: pa,
+                    users: ua,
+                    mode: ma,
+                },
+                InboundOpts::Snell {
+                    common_opts: b,
+                    version: vb,
+                    psk: pb,
+                    users: ub,
+                    mode: mb,
+                },
+            ) => a == b && va == vb && pa == pb && ua == ub && ma == mb,
             (
                 InboundOpts::Anytls {
                     common_opts: a,
@@ -375,6 +417,20 @@ impl std::hash::Hash for InboundOpts {
                 password.hash(state);
                 // `users` intentionally excluded — handled via watch channel
             }
+            #[cfg(feature = "snell")]
+            InboundOpts::Snell {
+                common_opts,
+                version,
+                psk,
+                users,
+                mode,
+            } => {
+                common_opts.hash(state);
+                version.hash(state);
+                psk.hash(state);
+                users.hash(state);
+                mode.hash(state);
+            }
             InboundOpts::Anytls {
                 common_opts,
                 password,
@@ -449,6 +505,8 @@ impl InboundOpts {
             InboundOpts::Redir { common_opts, .. } => common_opts,
             #[cfg(feature = "shadowsocks")]
             InboundOpts::Shadowsocks { common_opts, .. } => common_opts,
+            #[cfg(feature = "snell")]
+            InboundOpts::Snell { common_opts, .. } => common_opts,
             InboundOpts::Anytls { common_opts, .. } => common_opts,
             InboundOpts::Hysteria2 { common_opts, .. } => common_opts,
             #[cfg(feature = "shadowquic")]
@@ -468,6 +526,8 @@ impl InboundOpts {
             InboundOpts::Redir { common_opts, .. } => common_opts,
             #[cfg(feature = "shadowsocks")]
             InboundOpts::Shadowsocks { common_opts, .. } => common_opts,
+            #[cfg(feature = "snell")]
+            InboundOpts::Snell { common_opts, .. } => common_opts,
             InboundOpts::Anytls { common_opts, .. } => common_opts,
             InboundOpts::Hysteria2 { common_opts, .. } => common_opts,
             #[cfg(feature = "shadowquic")]
@@ -487,6 +547,8 @@ impl InboundOpts {
             InboundOpts::Redir { .. } => "redir",
             #[cfg(feature = "shadowsocks")]
             InboundOpts::Shadowsocks { .. } => "shadowsocks",
+            #[cfg(feature = "snell")]
+            InboundOpts::Snell { .. } => "snell",
             InboundOpts::Anytls { .. } => "anytls",
             InboundOpts::Hysteria2 { .. } => "hysteria2",
             #[cfg(feature = "shadowquic")]

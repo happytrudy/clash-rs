@@ -385,6 +385,7 @@ pub enum Type {
     Redir,
     Tunnel,
     Shadowsocks,
+    Snell,
     Anytls,
     Hysteria2,
     SunnyQuic,

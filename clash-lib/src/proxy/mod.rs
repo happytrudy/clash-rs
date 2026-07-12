@@ -44,6 +44,8 @@ pub mod hysteria2;
 pub mod shadowquic;
 #[cfg(feature = "shadowsocks")]
 pub mod shadowsocks;
+#[cfg(feature = "snell")]
+pub mod snell;
 pub mod socks;
 #[cfg(feature = "ssh")]
 pub mod ssh;
